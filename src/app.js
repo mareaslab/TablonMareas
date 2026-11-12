@@ -65,6 +65,8 @@ const num = v => (v === '' || v == null || isNaN(+v)) ? null : +v;
 const acota = (n, a, b) => Math.min(b, Math.max(a, n));
 const fechaOK = s => (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)) ? s : '';
 const urlOK = u => /^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : '';
+const logoOK = v => (typeof v === 'string' && /^data:image\/(png|jpeg|webp|svg\+xml)[;,]/.test(v) && v.length < 700000) ? v : '';
+const colorOK = v => /^#[0-9a-f]{6}$/i.test(String(v || '')) ? String(v).toLowerCase() : '';
 const faseDe = estado => (ESTADOS.find(e => e.id === estado) || ESTADOS[0]).fase;
 
 const p2 = n => String(n).padStart(2, '0');
@@ -83,7 +85,8 @@ const masMeses = (s, n) => {
 const MES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 const f = s => { if (!s) return ''; const d = fecha(s); return `${d.getDate()} ${MES[d.getMonth()]} ${d.getFullYear()}`; };
 const fCorta = s => { const d = fecha(s); return `${d.getDate()} ${MES[d.getMonth()]}`; };
-const eur = n => n == null ? '—' : new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 }).format(n) + ' €';
+const miles = n => new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0, useGrouping: 'always' }).format(n);
+const eur = n => n == null ? '—' : miles(n) + ' €';
 const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
 
 /* ───────── datos ───────── */
@@ -97,6 +100,7 @@ function normConv(c) {
     ambito: c.ambito || '',
     estado: ESTADOS.some(e => e.id === c.estado) ? c.estado : 'Detectada',
     rol: ROLES.includes(c.rol) ? c.rol : '',
+    responsable: String(c.responsable || ''),
     apertura: fechaOK(c.apertura),
     plazo: fechaOK(c.plazo),
     plazoHora: c.plazoHora || '',
@@ -111,6 +115,7 @@ function normConv(c) {
     reqEjercicios: Math.max(0, num(c.reqEjercicios) || 0),
     reqUtilidadPublica: !!c.reqUtilidadPublica,
     reqRegistros: Array.isArray(c.reqRegistros) ? c.reqRegistros.map(String) : [],
+    reqDocs: Array.isArray(c.reqDocs) ? c.reqDocs.map(String) : [],
     reqVerificado: !!c.reqVerificado,
     semanasPrep: acota(num(c.semanasPrep) || 6, 1, 52),
     notas: c.notas || '',
@@ -125,6 +130,11 @@ function normConv(c) {
   };
 }
 
+function normTexto(t) {
+  t = t || {};
+  return { id: t.id || uid(), titulo: String(t.titulo || ''), etiqueta: String(t.etiqueta || ''), texto: String(t.texto || ''), limite: Math.max(0, num(t.limite) || 0) };
+}
+
 function normalizar(d) {
   d = d && typeof d === 'object' ? d : {};
   const e = d.entidad || {};
@@ -132,6 +142,8 @@ function normalizar(d) {
     version: 1,
     entidad: {
       nombre: e.nombre || '',
+      logo: logoOK(e.logo),
+      color: colorOK(e.color),
       constitucion: fechaOK(e.constitucion),
       constitucionAprox: !!e.constitucionAprox,
       ejercicios: (Array.isArray(e.ejercicios) ? e.ejercicios : [])
@@ -148,13 +160,31 @@ function normalizar(d) {
       })),
     },
     convocatorias: (Array.isArray(d.convocatorias) ? d.convocatorias : []).map(normConv),
-    meta: { ultimaCopia: (d.meta && d.meta.ultimaCopia) || '', cambios: (d.meta && d.meta.cambios) || 0 },
+    textos: (Array.isArray(d.textos) ? d.textos : []).map(normTexto),
+    meta: { ultimaCopia: (d.meta && d.meta.ultimaCopia) || '', cambios: (d.meta && d.meta.cambios) || 0, semilla: !!(d.meta && d.meta.semilla) },
   };
 }
 
+/* Datos iniciales incrustados al generar el archivo (python3 build.py --datos …). */
+function semilla() {
+  try { const el = document.getElementById('semilla'), t = el ? el.textContent.trim() : ''; return t && t[0] === '{' ? JSON.parse(t) : null; }
+  catch (e) { return null; }
+}
+
 function cargar() {
-  try { const crudo = localStorage.getItem(CLAVE); if (crudo) return normalizar(JSON.parse(crudo)); } catch (e) { /* almacenamiento no disponible */ }
-  return normalizar({});
+  const ini = semilla();
+  let d = null;
+  try { const crudo = localStorage.getItem(CLAVE); if (crudo) d = normalizar(JSON.parse(crudo)); } catch (e) { /* almacenamiento no disponible */ }
+  if (!d) { d = normalizar(ini || {}); d.meta.semilla = !!ini; return d; }
+  // Datos de una versión anterior: se completan una sola vez con la identidad y los textos iniciales.
+  if (ini && !d.meta.semilla) {
+    const s = normalizar(ini);
+    if (!d.entidad.logo) d.entidad.logo = s.entidad.logo;
+    if (!d.entidad.color) d.entidad.color = s.entidad.color;
+    if (!d.textos.length) d.textos = s.textos;
+    d.meta.semilla = true;
+  }
+  return d;
 }
 let S = cargar();
 
@@ -205,6 +235,13 @@ function elegibilidad(c) {
   }
   const estado = faltan.length ? 'no' : tramites.length ? 'tramite' : c.reqVerificado ? 'si' : 'verificar';
   return { estado, faltan, tramites, desde: sinFecha ? '' : desde };
+}
+
+/* Documentos que piden las bases y que la entidad aún no tiene listos (o caducan antes del cierre). */
+function docsDe(c) {
+  const ref = c.plazo && c.plazo >= hoy() ? c.plazo : hoy();
+  const pedidos = c.reqDocs.map(id => S.entidad.documentos.find(d => d.id === id)).filter(Boolean);
+  return { total: pedidos.length, faltan: pedidos.filter(d => !d.listo || (d.caduca && d.caduca < ref)), ref };
 }
 
 function textoEleg(c) {
@@ -258,6 +295,10 @@ function agenda() {
       for (const t of c.tareas) {
         if (!t.hecha && t.fecha && dias(h, t.fecha) <= 14) out.push({ tipo: 'tarea', fecha: t.fecha, titulo: t.texto || 'Tarea sin título', sub: c.nombre, cid: c.id, tid: t.id });
       }
+      const dc = docsDe(c);
+      if (dc.faltan.length && c.plazo && c.plazo >= h && dias(h, c.plazo) <= 30) {
+        out.push({ tipo: 'docs', fecha: h, titulo: `${dc.faltan.length === 1 ? 'Falta 1 documento' : `Faltan ${dc.faltan.length} documentos`} para presentar`, sub: `${c.nombre} — ${dc.faltan.map(d => d.nombre).join(', ')}`, cid: c.id });
+      }
       const el = elegibilidad(c);
       if (el.estado === 'no' && (!c.plazo || (c.plazo >= h && dias(h, c.plazo) <= 120))) {
         out.push({ tipo: 'noelegible', fecha: h, titulo: 'La entidad no cumple los requisitos en esta edición', sub: `${c.nombre} — ${el.desde ? `se podrá optar desde el ${f(el.desde)}; ` : ''}descártala o búscale una entidad aliada`, cid: c.id });
@@ -309,8 +350,8 @@ function resumenTexto() {
 
 /* ───────── vistas ───────── */
 const main = $('#main');
-const ui = { vista: 'hoy', fase: 'activa', ambito: '', q: '' };
-const VISTAS = ['hoy', 'convocatorias', 'calendario', 'entidad'];
+const ui = { vista: 'hoy', fase: 'activa', ambito: '', q: '', qt: '', enfocar: '' };
+const VISTAS = ['hoy', 'convocatorias', 'calendario', 'textos', 'entidad', 'informe'];
 
 const puntos = n => `<span class="encaje" role="img" aria-label="Encaje ${n || 0} de 5">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</span>`;
 const opciones = (lista, sel) => lista.map(o => `<option${o === sel ? ' selected' : ''}>${esc(o)}</option>`).join('');
@@ -319,7 +360,41 @@ function render() {
   const v = location.hash.replace('#', '');
   ui.vista = VISTAS.includes(v) ? v : 'hoy';
   $$('.top nav a').forEach(a => a.getAttribute('href') === '#' + ui.vista ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'));
-  main.innerHTML = { hoy: vistaHoy, convocatorias: vistaLista, calendario: vistaCalendario, entidad: vistaEntidad }[ui.vista]();
+  aplicarIdentidad();
+  main.innerHTML = { hoy: vistaHoy, convocatorias: vistaLista, calendario: vistaCalendario, textos: vistaTextos, entidad: vistaEntidad, informe: vistaInforme }[ui.vista]();
+  if (ui.enfocar) { const el = $(ui.enfocar); if (el) el.focus(); ui.enfocar = ''; }
+}
+
+function aplicarIdentidad() {
+  const E = S.entidad, img = $('#logo-entidad'), raiz = document.documentElement;
+  img.hidden = !E.logo;
+  if (E.logo) { if (img.getAttribute('src') !== E.logo) img.src = E.logo; img.alt = E.nombre || 'Logo de la entidad'; } else img.removeAttribute('src');
+  raiz.classList.toggle('con-logo', !!E.logo);
+  raiz.classList.toggle('con-marca', !!E.color);
+  if (E.color) raiz.style.setProperty('--marca', E.color); else raiz.style.removeProperty('--marca');
+  document.title = `Tabla de mareas${E.nombre ? ' · ' + E.nombre : ' · convocatorias'}`;
+}
+
+function cifrasHTML() {
+  const activas = S.convocatorias.filter(c => faseDe(c.estado) === 'activa');
+  const concedidas = S.convocatorias.filter(c => ['Concedida', 'En ejecución', 'Justificada'].includes(c.estado));
+  const resueltas = concedidas.length + S.convocatorias.filter(c => c.estado === 'Denegada').length;
+  const total = concedidas.reduce((s, c) => s + (c.importeConcedido || 0), 0);
+  return `<dl class="cifras">
+      <div><dt>En curso</dt><dd>${activas.length}</dd></div>
+      <div><dt>En preparación</dt><dd>${activas.filter(c => c.estado === 'En preparación').length}</dd></div>
+      <div><dt>Presentadas</dt><dd>${S.convocatorias.filter(c => c.estado === 'Presentada').length}</dd></div>
+      <div><dt>Concedido</dt><dd>${eur(total)} ${resueltas ? `<small>${concedidas.length} de ${resueltas} resueltas</small>` : ''}</dd></div>
+    </dl>`;
+}
+
+/* Dinero pedido que aún no tiene respuesta y lo que habría que poner de fondos propios. */
+function dineroHTML() {
+  const enJuego = S.convocatorias.filter(c => ['En preparación', 'Presentada'].includes(c.estado) && c.importeSolicitado);
+  if (!enJuego.length) return '';
+  const pedido = enJuego.reduce((s, c) => s + c.importeSolicitado, 0);
+  const propio = enJuego.reduce((s, c) => s + (c.cofinanciacion > 0 && c.cofinanciacion < 100 ? c.importeSolicitado * c.cofinanciacion / (100 - c.cofinanciacion) : 0), 0);
+  return `<p class="dinero">Solicitado a la espera de respuesta: <b>${eur(pedido)}</b> en ${plural(enJuego.length, 'convocatoria', 'convocatorias')}.${propio ? ` Si se concediera todo, la aportación propia estimada sería de <b>${eur(Math.round(propio))}</b>.` : ''}</p>`;
 }
 
 function vistaHoy() {
@@ -333,6 +408,7 @@ function vistaHoy() {
         <li><div><strong>Trae tus convocatorias.</strong> Importa un archivo de datos o añade la primera a mano.</div></li>
         <li><div><strong>Cuenta cómo es la entidad.</strong> Con la fecha de constitución se calcula sola la elegibilidad de cada convocatoria.</div></li>
         <li><div><strong>Abre esta página cada lunes.</strong> Te dirá qué vence, qué hay que confirmar y qué empezar.</div></li>
+        <li><div><strong>Guarda en Textos lo que repites.</strong> Quiénes somos, trayectoria, equipo: listos para copiar, con contador de caracteres.</div></li>
       </ol>
       <div class="fila-btn">
         <button class="btn primario" data-accion="datos">Importar un archivo de datos</button>
@@ -346,11 +422,6 @@ function vistaHoy() {
   const futuras = activas.filter(c => c.plazo && c.plazo >= h).sort((a, b) => a.plazo.localeCompare(b.plazo));
   const opta = c => elegibilidad(c).estado !== 'no';
   const prox = futuras.find(c => opta(c) && (c.estado === 'En preparación' || c.encaje >= 3)) || futuras.find(opta) || futuras[0];
-  const concedidas = S.convocatorias.filter(c => ['Concedida', 'En ejecución', 'Justificada'].includes(c.estado));
-  const denegadas = S.convocatorias.filter(c => c.estado === 'Denegada');
-  const totalConcedido = concedidas.reduce((s, c) => s + (c.importeConcedido || 0), 0);
-  const resueltas = concedidas.length + denegadas.length;
-
   let cabecera;
   if (prox) {
     const d = dias(h, prox.plazo), [cls, txt] = textoEleg(prox);
@@ -377,7 +448,7 @@ function vistaHoy() {
   const fila = a => {
     const d = dias(h, a.fecha);
     const urg = a.tipo === 'vencido' || (a.tipo === 'plazo' && d <= 7) || (a.tipo === 'tarea' && d < 0) || (a.tipo === 'doc' && d < 0) || a.tipo === 'cuentas';
-    const cuando = ['confirmar', 'preparar', 'noelegible'].includes(a.tipo) ? `Ahora<small>${{ confirmar: 'por confirmar', preparar: 'por empezar', noelegible: 'por decidir' }[a.tipo]}</small>` : `${fCorta(a.fecha)}<small>${d === 0 ? 'hoy' : d < 0 ? `hace ${-d} d` : `en ${d} d`}</small>`;
+    const cuando = ['confirmar', 'preparar', 'noelegible', 'docs'].includes(a.tipo) ? `Ahora<small>${{ confirmar: 'por confirmar', preparar: 'por empezar', noelegible: 'por decidir', docs: 'por reunir' }[a.tipo]}</small>` : `${fCorta(a.fecha)}<small>${d === 0 ? 'hoy' : d < 0 ? `hace ${-d} d` : `en ${d} d`}</small>`;
     const accion = a.tipo === 'tarea'
       ? `<label class="hecho"><input type="checkbox" data-hecha="${a.cid}" data-tid="${a.tid}"> Hecha</label>`
       : a.cid ? `<button class="btn mini" data-abrir="${a.cid}">Abrir</button>` : `<a class="btn mini" href="#entidad">Entidad</a>`;
@@ -390,17 +461,14 @@ function vistaHoy() {
     ? `<p class="aviso" style="margin-top:var(--e6)">${copia === null ? 'Todavía no has descargado ninguna copia de seguridad.' : `La última copia de seguridad es de hace ${copia} días.`} Los datos solo están en este navegador. <button class="btn enlace" data-accion="exportar">Descargar copia ahora</button></p>` : '';
 
   return `${cabecera}
-    <dl class="cifras">
-      <div><dt>En curso</dt><dd>${activas.length}</dd></div>
-      <div><dt>En preparación</dt><dd>${activas.filter(c => c.estado === 'En preparación').length}</dd></div>
-      <div><dt>Presentadas</dt><dd>${S.convocatorias.filter(c => c.estado === 'Presentada').length}</dd></div>
-      <div><dt>Concedido</dt><dd>${eur(totalConcedido)} ${resueltas ? `<small>${concedidas.length} de ${resueltas} resueltas</small>` : ''}</dd></div>
-    </dl>
+    ${cifrasHTML()}
+    ${dineroHTML()}
     ${bloque('Pide decisión ya', plural(ya.length, 'asunto', 'asuntos'), ya, 'Nada atrasado. Bien.')}
     ${bloque('Próximos 14 días', plural(pronto.length, 'asunto', 'asuntos'), pronto, 'Nada con fecha en las próximas dos semanas.')}
     ${luego.length ? bloque('En el horizonte', 'hasta 30 días', luego, '') : ''}
     <div class="fila-btn" style="margin-top:var(--e6)">
       <button class="btn" data-accion="resumen">Copiar resumen para el equipo</button>
+      <a class="btn" href="#informe">Informe para la junta</a>
       <a class="btn" href="#calendario">Ver el año entero</a>
     </div>
     ${avisoCopia}`;
@@ -434,12 +502,14 @@ function listaHTML() {
     const activa = faseDe(c.estado) === 'activa';
     const quedan = d === null || !activa ? '' : `<span class="marca-e dias ${d <= 14 ? 'cerca' : ''}">${d < 0 ? `venció hace ${-d} d` : d === 0 ? 'cierra hoy' : `quedan ${d} d`}</span>`;
     const pend = c.tareas.filter(t => !t.hecha).length;
+    const dc = activa ? docsDe(c) : { total: 0 };
+    const docs = dc.total ? `<span class="marca-e ${dc.faltan.length ? 'duda' : 'si'}">${dc.faltan.length ? `${dc.faltan.length === 1 ? 'falta 1 documento' : `faltan ${dc.faltan.length} documentos`}` : 'documentación lista'}</span>` : '';
     return `<li>
       <button class="abrir" data-abrir="${c.id}" aria-label="Abrir ${esc(c.nombre)}">
         ${fch}
         <span><span class="nombre">${esc(c.nombre)}</span>
-          <span class="meta">${esc([c.ambito, c.importeTexto, c.rol && c.rol !== 'no aplica' ? `como ${c.rol}` : ''].filter(Boolean).join(' · '))}</span>
-          <span class="marcas">${quedan}${faseDe(c.estado) === 'resuelta' ? '' : `<span class="marca-e ${cls}">${esc(txt)}</span>`}${c.tareas.length ? `<span class="marca-e duda">${pend ? `${plural(pend, 'tarea pendiente', 'tareas pendientes')}` : 'plan completado'}</span>` : ''}</span>
+          <span class="meta">${esc([c.ambito, c.importeTexto, c.rol && c.rol !== 'no aplica' ? `como ${c.rol}` : '', c.responsable ? `lleva ${c.responsable}` : ''].filter(Boolean).join(' · '))}</span>
+          <span class="marcas">${quedan}${faseDe(c.estado) === 'resuelta' ? '' : `<span class="marca-e ${cls}">${esc(txt)}</span>`}${docs}${c.tareas.length ? `<span class="marca-e duda">${pend ? `${plural(pend, 'tarea pendiente', 'tareas pendientes')}` : 'plan completado'}</span>` : ''}</span>
         </span>
       </button>
       ${puntos(c.encaje)}
@@ -545,6 +615,17 @@ function vistaEntidad() {
         <div class="c3"><label class="etq" for="e-upp">…o prevista para</label><input type="date" id="e-upp" data-ent="utilidadPublicaPrevista" value="${E.utilidadPublicaPrevista}"></div>
       </div>
     </section>
+    <section class="seccion"><h2>Identidad<small>logo y color para la cabecera y los informes</small></h2>
+      <div class="rejilla">
+        <div class="c6"><span class="etq-g">Logo</span>
+          <div class="logo-zona">${E.logo ? `<img src="${esc(E.logo)}" alt="Logo de ${esc(E.nombre || 'la entidad')}">` : '<span class="ayuda" style="margin:0">Todavía no hay logo.</span>'}</div>
+          <div class="fila-btn"><input type="file" id="e-logo" class="sr" accept="image/png,image/jpeg,image/webp,image/svg+xml"><label class="btn mini" for="e-logo">${E.logo ? 'Cambiar el logo' : 'Subir un logo'}</label>${E.logo ? '<button class="btn mini" data-accion="quitar-logo">Quitar</button>' : ''}</div>
+          <p class="ayuda">PNG, JPG, WebP o SVG de hasta 400 KB. Se guarda en este ordenador con el resto de datos.</p></div>
+        <div class="c6"><label class="etq" for="e-color">Color de marca</label>
+          <div class="fila-btn" style="margin:0"><input type="color" id="e-color" value="${E.color || '#0e5c63'}">${E.color ? '<button class="btn mini" data-accion="quitar-color">Volver al color original</button>' : ''}</div>
+          <p class="ayuda">Tiñe las barras, los enlaces y las marcas de la herramienta.</p></div>
+      </div>
+    </section>
     <section class="seccion"><h2>Ejercicios económicos<small>cuentas anuales aprobadas en asamblea</small></h2>
       <table class="tabla apilar"><thead><tr><th>Ejercicio</th><th>Aprobación prevista</th><th>Aprobadas el</th><th></th></tr></thead><tbody>
       ${E.ejercicios.map((e, i) => `<tr>
@@ -594,6 +675,14 @@ function abrirConv(id) {
 }
 
 function avisoElegHTML() {
+  const dc = docsDe(borrador);
+  if (!dc.total) return avisoReqHTML();
+  return avisoReqHTML() + (dc.faltan.length
+    ? `<p class="aviso no"><strong>Documentación: ${dc.total - dc.faltan.length} de ${dc.total} lista.</strong> Falta o caduca antes del cierre: ${esc(dc.faltan.map(d => d.nombre).join('; '))}.</p>`
+    : `<p class="aviso"><strong>Documentación completa:</strong> ${plural(dc.total, 'documento listo', 'documentos listos')}.</p>`);
+}
+
+function avisoReqHTML() {
   const el = elegibilidad(borrador);
   const cuando = borrador.plazo ? `En la fecha de cierre (${f(borrador.plazo)})` : 'A día de hoy (no hay fecha de cierre)';
   if (el.estado === 'no') return `<p class="aviso no"><strong>No elegible ${borrador.plazo ? 'en esta edición' : 'por ahora'}.</strong> ${cuando} falta: ${esc(el.faltan.join('; '))}.${el.desde ? ` Se podrá optar a partir del <strong>${f(el.desde)}</strong>.` : ''}${el.tramites.length ? ` Además, falta inscribirse en: ${esc(el.tramites.join(', '))}.` : ''}</p>`;
@@ -622,9 +711,10 @@ function pintarFicha() {
       <div class="c6"><label class="etq" for="c-fin">Financiador o programa</label><input type="text" id="c-fin" name="financiador" value="${esc(c.financiador)}"></div>
       <div class="c3"><label class="etq" for="c-amb">Ámbito</label><select id="c-amb" name="ambito"><option value="">—</option>${opciones(AMBITOS, c.ambito)}</select></div>
       <div class="c3"><label class="etq" for="c-rol">Papel de la entidad</label><select id="c-rol" name="rol">${ROLES.map(r => `<option value="${r}"${r === c.rol ? ' selected' : ''}>${r || '—'}</option>`).join('')}</select></div>
-      <div class="c4"><label class="etq" for="c-est">Estado</label><select id="c-est" name="estado">${opciones(ESTADOS.map(e => e.id), c.estado)}</select></div>
-      <div class="c4"><label class="etq" for="c-enc">Encaje (1 a 5)</label><select id="c-enc" name="encaje">${[0, 1, 2, 3, 4, 5].map(n => `<option value="${n}"${n === c.encaje ? ' selected' : ''}>${n || 'Sin valorar'}</option>`).join('')}</select></div>
-      <div class="c4"><label class="etq" for="c-imp">Importe (texto libre)</label><input type="text" id="c-imp" name="importeTexto" value="${esc(c.importeTexto)}" placeholder="Hasta 25.000 €"></div>
+      <div class="c3"><label class="etq" for="c-est">Estado</label><select id="c-est" name="estado">${opciones(ESTADOS.map(e => e.id), c.estado)}</select></div>
+      <div class="c3"><label class="etq" for="c-enc">Encaje (1 a 5)</label><select id="c-enc" name="encaje">${[0, 1, 2, 3, 4, 5].map(n => `<option value="${n}"${n === c.encaje ? ' selected' : ''}>${n || 'Sin valorar'}</option>`).join('')}</select></div>
+      <div class="c3"><label class="etq" for="c-resp">Quién la lleva</label><input type="text" id="c-resp" name="responsable" value="${esc(c.responsable)}" list="lista-personas" autocomplete="off"><datalist id="lista-personas">${[...new Set(S.convocatorias.map(x => x.responsable).filter(Boolean))].map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>
+      <div class="c3"><label class="etq" for="c-imp">Importe (texto libre)</label><input type="text" id="c-imp" name="importeTexto" value="${esc(c.importeTexto)}" placeholder="Hasta 25.000 €"></div>
     </div></fieldset>
 
     <fieldset><legend>Fechas</legend><div class="rejilla">
@@ -645,6 +735,11 @@ function pintarFicha() {
         <div class="c4"><label class="etq" for="c-eje">Ejercicios cerrados que pide</label><input type="number" id="c-eje" name="reqEjercicios" min="0" max="10" value="${c.reqEjercicios}" data-req></div>
         <div class="c4"><span class="etq-g espaciador">&nbsp;</span><label class="casilla"><input type="checkbox" name="reqUtilidadPublica" ${c.reqUtilidadPublica ? 'checked' : ''} data-req> Exige utilidad pública</label></div>
         <div class="c12"><span class="etq-g">Registros que exige</span><div class="registros-check">${E.registros.map(r => `<label class="casilla"><input type="checkbox" name="reqRegistros" value="${esc(r.id)}" ${c.reqRegistros.includes(r.id) ? 'checked' : ''} data-req> <span>${esc(r.nombre)}${r.estado === 'hecho' ? '' : ` <span class="marca-e duda">${esc(r.estado)}</span>`}</span></label>`).join('')}</div></div>
+        <div class="c12"><span class="etq-g">Documentación que piden las bases</span><div class="registros-check">${E.documentos.filter(d => d.nombre).map(d => {
+          const ref = c.plazo && c.plazo >= hoy() ? c.plazo : hoy();
+          const est = !d.listo ? ['duda', 'falta'] : (d.caduca && d.caduca < ref) ? ['no', 'caduca antes'] : ['si', 'listo'];
+          return `<label class="casilla"><input type="checkbox" name="reqDocs" value="${esc(d.id)}" ${c.reqDocs.includes(d.id) ? 'checked' : ''} data-req> <span>${esc(d.nombre)} <span class="marca-e ${est[0]}">${est[1]}</span></span></label>`;
+        }).join('')}</div><p class="ayuda">Marca lo que exigen las bases. El estado de cada documento se lleva en Entidad.</p></div>
         <div class="c12"><label class="casilla"><input type="checkbox" name="reqVerificado" ${c.reqVerificado ? 'checked' : ''} data-req> He comprobado los requisitos en las bases oficiales</label></div>
       </div>
     </fieldset>
@@ -668,6 +763,7 @@ function pintarFicha() {
       <div class="c6"><label class="etq" for="c-apr">Qué aprendimos (para la próxima edición)</label><input type="text" id="c-apr" name="aprendizaje" value="${esc(c.aprendizaje)}"></div>
     </div></fieldset>`;
   $('#btn-borrar-conv').hidden = esNueva;
+  $('#btn-siguiente').hidden = esNueva;
 }
 
 function sincronizarTareas() {
@@ -683,11 +779,11 @@ function leerFicha() {
   const v = k => String(fd.get(k) ?? '');
   Object.assign(borrador, normConv({
     ...borrador,
-    nombre: v('nombre'), financiador: v('financiador'), ambito: v('ambito'), rol: v('rol'), estado: v('estado'),
+    nombre: v('nombre'), financiador: v('financiador'), responsable: v('responsable'), ambito: v('ambito'), rol: v('rol'), estado: v('estado'),
     encaje: v('encaje'), importeTexto: v('importeTexto'), apertura: v('apertura'), plazo: v('plazo'), plazoHora: v('plazoHora'),
     resolucion: v('resolucion'), plazoConfirmado: fd.has('plazoConfirmado'), semanasPrep: v('semanasPrep'), revisado: v('revisado'),
     reqAntiguedadMeses: v('reqAntiguedadMeses'), reqEjercicios: v('reqEjercicios'), reqUtilidadPublica: fd.has('reqUtilidadPublica'),
-    reqRegistros: fd.getAll('reqRegistros'), reqVerificado: fd.has('reqVerificado'),
+    reqRegistros: fd.getAll('reqRegistros'), reqDocs: fd.getAll('reqDocs'), reqVerificado: fd.has('reqVerificado'),
     importeSolicitado: v('importeSolicitado'), importeConcedido: v('importeConcedido'), cofinanciacion: v('cofinanciacion'),
     notas: v('notas'), enlace: v('enlace'), carpeta: v('carpeta'), motivo: v('motivo'), aprendizaje: v('aprendizaje'),
   }));
@@ -746,7 +842,7 @@ function importar(texto, modo) {
   if (!d || typeof d !== 'object' || (!Array.isArray(d.convocatorias) && !d.entidad)) { aviso('No reconozco el formato: falta la lista «convocatorias».'); return false; }
   if (modo === 'reemplazar') {
     if (S.convocatorias.length && !confirm('Se sustituirá todo lo que hay ahora por el contenido del archivo. ¿Continuar?')) return false;
-    S = normalizar(d); guardar(); render();
+    S = normalizar(d); S.meta.semilla = true; guardar(); render();
     aviso(`Datos cargados: ${plural(S.convocatorias.length, 'convocatoria', 'convocatorias')}.`);
     return true;
   }
@@ -761,10 +857,14 @@ function importar(texto, modo) {
     } else if (nom) { S.convocatorias.push(normConv(inc)); nuevas++; }
   }
   const E = S.entidad;
-  let ent = false;
+  let ent = false, nt = 0;
   if (d.entidad && !E.constitucion && !E.nombre) { S.entidad = normalizar({ entidad: d.entidad }).entidad; ent = true; }
+  else if (d.entidad) { if (!E.logo) E.logo = logoOK(d.entidad.logo); if (!E.color) E.color = colorOK(d.entidad.color); }
+  for (const t of (Array.isArray(d.textos) ? d.textos : [])) {
+    if (t && t.titulo && !S.textos.some(x => x.id === t.id || x.titulo === t.titulo)) { S.textos.push(normTexto(t)); nt++; }
+  }
   guardar(); render();
-  aviso(`${plural(nuevas, 'convocatoria nueva', 'convocatorias nuevas')}, ${plural(act, 'actualizada', 'actualizadas')}${ent ? ' y datos de la entidad cargados' : ''}.`);
+  aviso(`${plural(nuevas, 'convocatoria nueva', 'convocatorias nuevas')}, ${plural(act, 'actualizada', 'actualizadas')}${nt ? `, ${plural(nt, 'texto nuevo', 'textos nuevos')}` : ''}${ent ? ' y datos de la entidad cargados' : ''}.`);
   return true;
 }
 
@@ -791,7 +891,8 @@ function exportarICS() {
 
 function pintarDatos() {
   const c = S.meta.ultimaCopia;
-  $('#datos-estado').textContent = `${plural(S.convocatorias.length, 'convocatoria guardada', 'convocatorias guardadas')} en este navegador. ${c ? `Última copia: ${f(c.slice(0, 10))}.` : 'Aún no se ha descargado ninguna copia.'}`;
+  $('#btn-semilla').hidden = !semilla();
+  $('#datos-estado').textContent = `${plural(S.convocatorias.length, 'convocatoria', 'convocatorias')} y ${plural(S.textos.length, 'texto', 'textos')} en este navegador. ${c ? `Última copia: ${f(c.slice(0, 10))}.` : 'Aún no se ha descargado ninguna copia.'}`;
 }
 
 async function copiar(texto) {
@@ -805,12 +906,18 @@ async function copiar(texto) {
   }
 }
 
-let relojAviso;
-function aviso(texto) {
+let relojAviso, previoAviso = null;
+/* Con «previo» (una foto de los datos antes del cambio) el aviso ofrece deshacer. */
+function aviso(texto, previo) {
   const el = $('#toast');
-  el.textContent = texto; el.classList.add('ver');
-  clearTimeout(relojAviso); relojAviso = setTimeout(() => el.classList.remove('ver'), 4200);
+  $('#toast-t').textContent = texto;
+  previoAviso = previo || null;
+  $('#toast-deshacer').hidden = !previo;
+  el.classList.add('ver');
+  clearTimeout(relojAviso);
+  relojAviso = setTimeout(() => { el.classList.remove('ver'); previoAviso = null; }, previo ? 9000 : 4200);
 }
+const foto = () => JSON.stringify(S);
 
 /* ───────── eventos ───────── */
 document.addEventListener('click', async ev => {
@@ -831,7 +938,21 @@ document.addEventListener('click', async ev => {
     }
     return;
   }
-  if (d.quitarDoc) { if (confirm('¿Quitar este documento de la lista?')) { S.entidad.documentos = S.entidad.documentos.filter(x => x.id !== d.quitarDoc); guardar(); render(); } return; }
+  if (d.quitarDoc) {
+    if (confirm('¿Quitar este documento de la lista?')) {
+      S.entidad.documentos = S.entidad.documentos.filter(x => x.id !== d.quitarDoc);
+      S.convocatorias.forEach(c => { c.reqDocs = c.reqDocs.filter(x => x !== d.quitarDoc); });
+      guardar(); render();
+    }
+    return;
+  }
+  if (d.copiarTx) { const t = S.textos.find(x => x.id === d.copiarTx); if (t) aviso(await copiar(t.texto) ? `Texto copiado: ${miles([...t.texto].length)} caracteres.` : 'No se ha podido copiar.'); return; }
+  if (d.duplicarTx) {
+    const i = S.textos.findIndex(x => x.id === d.duplicarTx);
+    if (i >= 0) { S.textos.splice(i + 1, 0, normTexto({ ...S.textos[i], id: uid(), titulo: S.textos[i].titulo + ' (copia)' })); guardar(); render(); aviso('Texto duplicado: adáptalo a otra longitud o idioma.'); }
+    return;
+  }
+  if (d.quitarTx) { const previo = foto(); S.textos = S.textos.filter(x => x.id !== d.quitarTx); guardar(); render(); aviso('Texto eliminado.', previo); return; }
   if (d.quitarT) { sincronizarTareas(); borrador.tareas = borrador.tareas.filter(t => t.id !== d.quitarT); $('#tareas-zona').innerHTML = tareasHTML(); return; }
 
   switch (d.accion) {
@@ -855,8 +976,30 @@ document.addEventListener('click', async ev => {
       const xs = $$('#tareas-zona input[type="text"]'); (xs.find(x => !x.value) || xs[xs.length - 1]).focus(); break;
     }
     case 'borrar-conv':
-      if (confirm(`¿Eliminar «${borrador.nombre}»? No se puede deshacer.`)) {
-        S.convocatorias = S.convocatorias.filter(c => c.id !== borrador.id); guardar(); dlgConv.close(); render(); aviso('Convocatoria eliminada.');
+      { const previo = foto(); S.convocatorias = S.convocatorias.filter(c => c.id !== borrador.id); guardar(); dlgConv.close(); render(); aviso(`«${borrador.nombre}» eliminada.`, previo); }
+      break;
+    case 'deshacer':
+      if (previoAviso) { try { S = normalizar(JSON.parse(previoAviso)); } catch (e) { break; } previoAviso = null; guardar(); render(); aviso('Cambio deshecho.'); }
+      break;
+    case 'siguiente-edicion': {
+      leerFicha();
+      const previo = foto(), mas = x => x ? masMeses(x, 12) : '';
+      const i = S.convocatorias.findIndex(c => c.id === borrador.id);
+      if (i >= 0) S.convocatorias[i] = borrador;
+      const sig = normConv({ ...borrador, id: uid(), idExterno: '', nombre: borrador.nombre.replace(/\b20\d\d\b/g, a => +a + 1),
+        estado: 'En estudio', apertura: mas(borrador.apertura), plazo: mas(borrador.plazo), resolucion: '', plazoConfirmado: false,
+        reqVerificado: false, revisado: '', importeSolicitado: null, importeConcedido: null, motivo: '', tareas: [] });
+      S.convocatorias.push(sig); guardar(); dlgConv.close(); render(); abrirConv(sig.id);
+      aviso('Edición siguiente creada con las fechas un año después, como estimadas.', previo);
+      break;
+    }
+    case 'imprimir': window.print(); break;
+    case 'quitar-logo': S.entidad.logo = ''; guardar(); render(); break;
+    case 'quitar-color': S.entidad.color = ''; guardar(); render(); break;
+    case 'nuevo-texto': S.textos.unshift(normTexto({})); guardar(); ui.qt = ''; ui.enfocar = '.texto-titulo'; render(); break;
+    case 'restaurar-semilla':
+      if (confirm('Se sustituirá todo lo que hay ahora por los datos iniciales del archivo. ¿Continuar?')) {
+        S = normalizar(semilla() || {}); S.meta.semilla = true; guardar(); dlgDatos.close(); render(); aviso('Datos iniciales restaurados.');
       }
       break;
     case 'importar-texto': {
@@ -866,8 +1009,9 @@ document.addEventListener('click', async ev => {
     }
     case 'borrar-todo':
       if (confirm('Se borrarán todas las convocatorias y los datos de la entidad de este navegador. ¿Seguro?')) {
-        try { localStorage.removeItem(CLAVE); } catch (e) { /* nada */ }
-        S = normalizar({}); dlgDatos.close(); render(); aviso('Datos borrados.');
+        S = normalizar({}); S.meta.semilla = true;
+        try { localStorage.setItem(CLAVE, JSON.stringify(S)); } catch (e) { /* nada */ }
+        dlgDatos.close(); render(); aviso('Datos borrados.');
       }
       break;
   }
@@ -877,13 +1021,24 @@ document.addEventListener('change', ev => {
   const el = ev.target, d = el.dataset;
   const val = el.type === 'checkbox' ? el.checked : el.value;
 
-  if (d.estado) { const c = S.convocatorias.find(x => x.id === d.estado); if (c) { c.estado = val; guardar(); render(); aviso(`${c.nombre}: ${val}.`); } return; }
+  if (d.estado) { const c = S.convocatorias.find(x => x.id === d.estado); if (c) { const previo = foto(); c.estado = val; guardar(); render(); aviso(`${c.nombre}: ${val}.`, previo); } return; }
   if (d.hecha) {
     const c = S.convocatorias.find(x => x.id === d.hecha), t = c && c.tareas.find(x => x.id === d.tid);
-    if (t) { t.hecha = val; guardar(); render(); aviso('Tarea hecha.'); }
+    if (t) { const previo = foto(); t.hecha = val; guardar(); render(); aviso('Tarea hecha.', previo); }
     return;
   }
   if (el.id === 'f-ambito') { ui.ambito = val; $('#lista-zona').innerHTML = listaHTML(); return; }
+  if (el.id === 'e-color') { S.entidad.color = colorOK(val); guardar(); render(); return; }
+  if (el.id === 'e-logo' && el.files[0]) {
+    const a = el.files[0];
+    if (!/^image\/(png|jpeg|webp|svg\+xml)$/.test(a.type)) { aviso('El logo tiene que ser PNG, JPG, WebP o SVG.'); return; }
+    if (a.size > 400 * 1024) { aviso('El logo pesa más de 400 KB. Usa una versión más ligera.'); return; }
+    const lector = new FileReader();
+    lector.onload = () => { const u = logoOK(String(lector.result)); if (!u) { aviso('No se ha podido leer el logo.'); return; } S.entidad.logo = u; guardar(); render(); aviso('Logo guardado.'); };
+    lector.readAsDataURL(a);
+    return;
+  }
+  if (d.tx) { clearTimeout(relojTexto); guardar(); return; }
 
   if (d.ent) {
     S.entidad[d.ent] = el.type === 'checkbox' ? val : (el.type === 'date' ? fechaOK(val) : val);
@@ -915,10 +1070,91 @@ document.addEventListener('change', ev => {
   }
 });
 
+let relojTexto;
 document.addEventListener('input', ev => {
-  if (ev.target.id === 'f-q') { ui.q = ev.target.value; $('#lista-zona').innerHTML = listaHTML(); }
+  const el = ev.target, d = el.dataset;
+  if (el.id === 'f-q') { ui.q = el.value; $('#lista-zona').innerHTML = listaHTML(); return; }
+  if (el.id === 't-q') { ui.qt = el.value; $('#textos-zona').innerHTML = textosHTML(); return; }
+  if (d.tx) {
+    const t = S.textos.find(x => x.id === d.tx); if (!t) return;
+    t[d.campo] = d.campo === 'limite' ? Math.max(0, num(el.value) || 0) : el.value;
+    const c = document.getElementById('cont-' + t.id); if (c) c.innerHTML = contadorHTML(t);
+    clearTimeout(relojTexto); relojTexto = setTimeout(guardar, 600);
+  }
 });
+
+/* Atajos: N crea una convocatoria, / busca. */
+document.addEventListener('keydown', ev => {
+  if (ev.ctrlKey || ev.metaKey || ev.altKey || document.querySelector('dialog[open]')) return;
+  if (ev.target.closest && ev.target.closest('input, textarea, select')) return;
+  if (ev.key === 'n' || ev.key === 'N') { ev.preventDefault(); abrirConv(null); }
+  else if (ev.key === '/') {
+    ev.preventDefault();
+    if (ui.vista === 'convocatorias') $('#f-q').focus(); else { ui.enfocar = '#f-q'; location.hash = '#convocatorias'; }
+  }
+});
+window.addEventListener('beforeunload', () => { if (relojTexto) { clearTimeout(relojTexto); guardar(); } });
 $('#form-conv').addEventListener('submit', ev => { ev.preventDefault(); guardarFicha(); });
 window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
+
+/* ───────── textos reutilizables ───────── */
+function contadorHTML(t) {
+  const n = [...t.texto].length, p = (t.texto.trim().match(/\S+/g) || []).length;
+  const pasa = t.limite && n > t.limite;
+  return `<span class="${pasa ? 'pasa' : ''}">${miles(n)}${t.limite ? ` de ${miles(t.limite)}` : ''} caracteres${pasa ? ` · sobran ${miles(n - t.limite)}` : ''}</span> · ${plural(p, 'palabra', 'palabras')}`;
+}
+
+function textosHTML() {
+  const q = ui.qt.trim().toLowerCase();
+  const lista = S.textos.filter(t => !q || `${t.titulo} ${t.etiqueta} ${t.texto}`.toLowerCase().includes(q));
+  if (!lista.length) return `<p class="vacio">${S.textos.length ? 'Ningún texto con esa búsqueda.' : 'Aún no hay textos. Empieza por los que repites en cada solicitud: quiénes somos, trayectoria, equipo y metodología.'}</p>`;
+  return lista.map(t => `<article class="texto">
+    <div class="texto-cab">
+      <input type="text" class="texto-titulo" data-tx="${t.id}" data-campo="titulo" value="${esc(t.titulo)}" placeholder="Título del bloque" aria-label="Título del texto">
+      <label class="mini-campo"><span>Etiqueta</span><input type="text" data-tx="${t.id}" data-campo="etiqueta" value="${esc(t.etiqueta)}" placeholder="idioma, uso…"></label>
+      <label class="mini-campo"><span>Límite</span><input type="number" data-tx="${t.id}" data-campo="limite" value="${t.limite || ''}" min="0" step="50" placeholder="sin límite" aria-label="Límite de caracteres"></label>
+    </div>
+    <textarea data-tx="${t.id}" data-campo="texto" rows="${acota(Math.ceil(t.texto.length / 95) + 1, 3, 14)}" placeholder="Escribe aquí el texto tal como lo pegarías en un formulario." aria-label="Texto de ${esc(t.titulo || 'este bloque')}">${esc(t.texto)}</textarea>
+    <div class="texto-pie"><span class="contador" id="cont-${t.id}">${contadorHTML(t)}</span>
+      <span class="texto-acc"><button class="btn mini primario" data-copiar-tx="${t.id}">Copiar</button><button class="btn mini" data-duplicar-tx="${t.id}">Duplicar</button><button class="quitar" data-quitar-tx="${t.id}" aria-label="Eliminar ${esc(t.titulo || 'este texto')}">×</button></span></div>
+  </article>`).join('');
+}
+
+function vistaTextos() {
+  return `<div class="cab-vista"><div><p class="ante">Textos</p><h1 class="titulo-vista">Lo que se repite en cada solicitud</h1>
+      <p class="sub">Guarda aquí los párrafos que acabas reescribiendo en todos los formularios. Pon el límite de caracteres que pide cada financiador y duplica un bloque para tener su versión corta, larga o en otro idioma.</p></div>
+      <button class="btn primario" data-accion="nuevo-texto">Nuevo texto</button></div>
+    <div class="filtros"><input type="search" id="t-q" placeholder="Buscar en los textos" aria-label="Buscar en los textos" value="${esc(ui.qt)}"></div>
+    <div id="textos-zona">${textosHTML()}</div>`;
+}
+
+/* ───────── informe para imprimir ───────── */
+function vistaInforme() {
+  const h = hoy(), E = S.entidad;
+  const act = S.convocatorias.filter(c => faseDe(c.estado) === 'activa');
+  const prox = act.filter(c => c.plazo && c.plazo >= h && c.plazo <= masMeses(h, 6)).sort((a, b) => a.plazo.localeCompare(b.plazo));
+  const espera = S.convocatorias.filter(c => c.estado === 'Presentada').sort((a, b) => (a.resolucion || '9999').localeCompare(b.resolucion || '9999'));
+  const ag = agenda().filter(a => a.fecha <= masDias(h, 14));
+  const hs = hitos().filter(x => !x.hecho && x.fecha);
+  return `<article class="informe">
+    <header class="informe-cab">
+      ${E.logo ? `<img src="${esc(E.logo)}" alt="${esc(E.nombre)}">` : ''}
+      <div><p class="ante">Informe de convocatorias · ${f(h)}</p><h1 class="titulo-vista">${esc(E.nombre || 'La entidad')}: dónde estamos</h1></div>
+      <button class="btn primario no-imprimir" data-accion="imprimir">Imprimir o guardar como PDF</button>
+    </header>
+    ${cifrasHTML()}
+    ${dineroHTML()}
+    <section class="seccion"><h2>Pide decisión<small>hoy y las próximas dos semanas</small></h2>
+      ${ag.length ? `<ul class="informe-lista">${ag.map(a => `<li><strong>${esc(a.titulo)}</strong> — ${esc(a.sub)}</li>`).join('')}</ul>` : '<p class="vacio">Nada urgente.</p>'}</section>
+    <section class="seccion"><h2>Plazos de los próximos seis meses<small>${plural(prox.length, 'convocatoria', 'convocatorias')}</small></h2>
+      ${prox.length ? `<div class="informe-desliza"><table class="tabla informe-tabla"><thead><tr><th>Cierre</th><th>Convocatoria</th><th>Encaje</th><th>Elegibilidad</th><th>Estado</th><th>La lleva</th></tr></thead><tbody>
+        ${prox.map(c => `<tr><td class="nob">${f(c.plazo)}${c.plazoConfirmado ? '' : '<br><small>estimada</small>'}</td><td><strong>${esc(c.nombre)}</strong>${c.importeTexto ? `<br><small>${esc(c.importeTexto)}</small>` : ''}</td><td class="nob">${c.encaje ? c.encaje + ' de 5' : '—'}</td><td>${esc(textoEleg(c)[1])}</td><td>${esc(c.estado)}</td><td>${esc(c.responsable || '—')}</td></tr>`).join('')}
+      </tbody></table></div>` : '<p class="vacio">Ninguna con fecha de cierre en este periodo.</p>'}</section>
+    ${espera.length ? `<section class="seccion"><h2>Presentadas, a la espera</h2><div class="informe-desliza"><table class="tabla informe-tabla"><thead><tr><th>Convocatoria</th><th>Solicitado</th><th>Resolución prevista</th></tr></thead><tbody>
+      ${espera.map(c => `<tr><td><strong>${esc(c.nombre)}</strong></td><td class="nob">${eur(c.importeSolicitado)}</td><td class="nob">${c.resolucion ? f(c.resolucion) : '—'}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
+    ${hs.length ? `<section class="seccion"><h2>Lo que se desbloquea con el tiempo</h2><ul class="informe-lista">${hs.map(x => `<li><strong>${f(x.fecha)}${x.aprox || x.previsto ? ' (previsto)' : ''}: ${esc(x.titulo)}.</strong>${x.convs.length ? ` Lo exigen: ${esc(x.convs.map(c => c.nombre).join('; '))}.` : ''}</li>`).join('')}</ul></section>` : ''}
+    <p class="ayuda" style="margin-top:var(--e6)">Generado con Tabla de mareas el ${f(h)}. Las fechas marcadas como estimadas están calculadas con la edición anterior y hay que confirmarlas en la fuente oficial.</p>
+  </article>`;
+}
 
 render();

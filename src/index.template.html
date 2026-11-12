@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="light dark">
 <title>Tabla de mareas · convocatorias</title>
 <meta name="description" content="Radar y preparación de convocatorias. Funciona sin conexión y guarda los datos en este ordenador.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230e5c63'/%3E%3Cpath d='M3 18c4-8 8-8 13 0s9 8 13 0' fill='none' stroke='%23f3eee4' stroke-width='3.5' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2310262e'/%3E%3Cpath d='M4 21c4-9 8-9 12 0s8 9 12 0' fill='none' stroke='%23f3eee4' stroke-width='3.5' stroke-linecap='round'/%3E%3Crect x='6.5' y='9' width='7' height='7' transform='rotate(45 10 12.5)' fill='%23d9431e'/%3E%3C/svg%3E">
 <style>
 /*__FUENTES__*/
 /*__CSS__*/
@@ -18,18 +18,23 @@
 <header class="top">
   <div class="top-in">
     <a class="marca" href="#hoy" aria-label="Tabla de mareas, ir a Hoy">
-      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M2 12c4.5-7 9-7 14 0s9.5 7 14 0M2 22c4.5-7 9-7 14 0s9.5 7 14 0" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
-      <span>Tabla de mareas</span>
+      <img id="logo-entidad" alt="" hidden>
+      <svg class="sello" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M3 21c4.3-9.5 8.7-9.5 13 0s8.7 9.5 13 0" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round"/>
+        <rect class="rombo" x="6" y="8.4" width="7.2" height="7.2" transform="rotate(45 9.6 12)"/>
+      </svg>
+      <span class="nombre-app">Tabla de mareas</span>
     </a>
     <nav aria-label="Secciones">
       <a href="#hoy">Hoy</a>
       <a href="#convocatorias">Convocatorias</a>
       <a href="#calendario">Calendario</a>
+      <a href="#textos">Textos</a>
       <a href="#entidad">Entidad</a>
     </nav>
     <div class="acciones">
       <button type="button" class="btn" data-accion="datos">Datos</button>
-      <button type="button" class="btn primario" data-accion="nueva">Nueva</button>
+      <button type="button" class="btn primario" data-accion="nueva" title="Atajo: tecla N">Nueva</button>
     </div>
   </div>
 </header>
@@ -44,7 +49,10 @@
     </div>
     <div class="dlg-cuerpo"><form id="form-conv" novalidate></form></div>
     <div class="dlg-pie">
-      <button type="button" class="btn peligro" id="btn-borrar-conv" data-accion="borrar-conv">Eliminar</button>
+      <div class="izq">
+        <button type="button" class="btn peligro" id="btn-borrar-conv" data-accion="borrar-conv">Eliminar</button>
+        <button type="button" class="btn" id="btn-siguiente" data-accion="siguiente-edicion">Crear la edición siguiente</button>
+      </div>
       <div class="der">
         <button type="button" class="btn" data-cerrar="dlg-conv">Cancelar</button>
         <button type="submit" class="btn primario" form="form-conv">Guardar</button>
@@ -68,7 +76,7 @@
       </fieldset>
 
       <fieldset><legend>Importar</legend>
-        <label class="casilla"><input type="radio" name="modo" value="fusionar" checked> Fusionar: añade las nuevas y actualiza las que ya existen, sin tocar sus tareas</label>
+        <label class="casilla"><input type="radio" name="modo" value="fusionar" checked> Fusionar: añade lo nuevo y actualiza lo que ya existe, sin tocar las tareas</label>
         <label class="casilla"><input type="radio" name="modo" value="reemplazar"> Reemplazar todo por el contenido del archivo</label>
         <div style="margin-top:var(--e3)">
           <label class="etq" for="datos-archivo">Desde un archivo .json</label>
@@ -87,14 +95,18 @@
       </fieldset>
 
       <fieldset style="margin-bottom:0"><legend>Empezar de cero</legend>
-        <div class="fila-btn"><button type="button" class="btn peligro" data-accion="borrar-todo">Borrar todos los datos de este navegador</button></div>
+        <div class="fila-btn">
+          <button type="button" class="btn" id="btn-semilla" data-accion="restaurar-semilla" hidden>Volver a los datos iniciales</button>
+          <button type="button" class="btn peligro" data-accion="borrar-todo">Borrar todos los datos de este navegador</button>
+        </div>
       </fieldset>
     </div>
   </div>
 </dialog>
 
-<div id="toast" role="status" aria-live="polite"></div>
+<div id="toast" role="status" aria-live="polite"><span id="toast-t"></span><button type="button" id="toast-deshacer" data-accion="deshacer" hidden>Deshacer</button></div>
 
+<script id="semilla" type="application/json">/*__SEMILLA__*/</script>
 <script>
 /*__JS__*/
 </script>

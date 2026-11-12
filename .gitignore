@@ -2,3 +2,6 @@ datos*.json
 tabla-de-mareas-*.json
 *.ics
 .DS_Store
+# archivos generados con datos de una entidad dentro
+/*.html
+!/index.html
