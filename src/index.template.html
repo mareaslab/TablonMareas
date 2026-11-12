@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Tabla de mareas · convocatorias</title>
+<meta name="description" content="Radar y preparación de convocatorias. Funciona sin conexión y guarda los datos en este ordenador.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230e5c63'/%3E%3Cpath d='M3 18c4-8 8-8 13 0s9 8 13 0' fill='none' stroke='%23f3eee4' stroke-width='3.5' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+/*__FUENTES__*/
+/*__CSS__*/
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Saltar al contenido</a>
+
+<header class="top">
+  <div class="top-in">
+    <a class="marca" href="#hoy" aria-label="Tabla de mareas, ir a Hoy">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M2 12c4.5-7 9-7 14 0s9.5 7 14 0M2 22c4.5-7 9-7 14 0s9.5 7 14 0" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+      <span>Tabla de mareas</span>
+    </a>
+    <nav aria-label="Secciones">
+      <a href="#hoy">Hoy</a>
+      <a href="#convocatorias">Convocatorias</a>
+      <a href="#calendario">Calendario</a>
+      <a href="#entidad">Entidad</a>
+    </nav>
+    <div class="acciones">
+      <button type="button" class="btn" data-accion="datos">Datos</button>
+      <button type="button" class="btn primario" data-accion="nueva">Nueva</button>
+    </div>
+  </div>
+</header>
+
+<main id="main" tabindex="-1"></main>
+
+<dialog id="dlg-conv" aria-labelledby="dlg-conv-t">
+  <div class="dlg">
+    <div class="dlg-cab">
+      <h2 id="dlg-conv-t">Convocatoria</h2>
+      <button type="button" class="btn mini" data-cerrar="dlg-conv">Cerrar</button>
+    </div>
+    <div class="dlg-cuerpo"><form id="form-conv" novalidate></form></div>
+    <div class="dlg-pie">
+      <button type="button" class="btn peligro" id="btn-borrar-conv" data-accion="borrar-conv">Eliminar</button>
+      <div class="der">
+        <button type="button" class="btn" data-cerrar="dlg-conv">Cancelar</button>
+        <button type="submit" class="btn primario" form="form-conv">Guardar</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlg-datos" aria-labelledby="dlg-datos-t">
+  <div class="dlg">
+    <div class="dlg-cab">
+      <h2 id="dlg-datos-t">Datos</h2>
+      <button type="button" class="btn mini" data-cerrar="dlg-datos">Cerrar</button>
+    </div>
+    <div class="dlg-cuerpo">
+      <p class="aviso" id="datos-estado"></p>
+
+      <fieldset><legend>Copia de seguridad</legend>
+        <p class="sub">Los datos viven solo en este navegador. Descarga una copia cada semana y guárdala en la carpeta compartida: sirve de respaldo y para que otra persona del equipo abra lo mismo en su ordenador.</p>
+        <div class="fila-btn"><button type="button" class="btn primario" data-accion="exportar">Descargar copia (.json)</button></div>
+      </fieldset>
+
+      <fieldset><legend>Importar</legend>
+        <label class="casilla"><input type="radio" name="modo" value="fusionar" checked> Fusionar: añade las nuevas y actualiza las que ya existen, sin tocar sus tareas</label>
+        <label class="casilla"><input type="radio" name="modo" value="reemplazar"> Reemplazar todo por el contenido del archivo</label>
+        <div style="margin-top:var(--e3)">
+          <label class="etq" for="datos-archivo">Desde un archivo .json</label>
+          <input type="file" id="datos-archivo" accept=".json,application/json" class="campo">
+        </div>
+        <div style="margin-top:var(--e4)">
+          <label class="etq" for="datos-texto">O pega aquí el JSON (por ejemplo, el que prepare Claude tras la búsqueda semanal)</label>
+          <textarea id="datos-texto" rows="4" spellcheck="false"></textarea>
+        </div>
+        <div class="fila-btn"><button type="button" class="btn" data-accion="importar-texto">Importar el texto pegado</button></div>
+      </fieldset>
+
+      <fieldset><legend>Calendario</legend>
+        <p class="sub">Descarga los cierres, el inicio de cada preparación y las tareas con fecha en un archivo .ics para Google Calendar, Outlook o el calendario del móvil.</p>
+        <div class="fila-btn"><button type="button" class="btn" data-accion="ics">Descargar plazos (.ics)</button></div>
+      </fieldset>
+
+      <fieldset style="margin-bottom:0"><legend>Empezar de cero</legend>
+        <div class="fila-btn"><button type="button" class="btn peligro" data-accion="borrar-todo">Borrar todos los datos de este navegador</button></div>
+      </fieldset>
+    </div>
+  </div>
+</dialog>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+/*__JS__*/
+</script>
+</body>
+</html>

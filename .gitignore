@@ -1,0 +1,4 @@
+datos*.json
+tabla-de-mareas-*.json
+*.ics
+.DS_Store
