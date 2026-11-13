@@ -125,7 +125,7 @@ function normConv(c) {
     aprendizaje: c.aprendizaje || '',
     revisado: fechaOK(c.revisado),
     tareas: (Array.isArray(c.tareas) ? c.tareas : []).map(t => ({
-      id: t.id || uid(), texto: String(t.texto || ''), fecha: fechaOK(t.fecha), hecha: !!t.hecha,
+      id: t.id || uid(), texto: String(t.texto || ''), fecha: fechaOK(t.fecha), hecha: !!t.hecha, mon: t.mon ? String(t.mon) : '',
     })),
   };
 }
@@ -161,7 +161,8 @@ function normalizar(d) {
     },
     convocatorias: (Array.isArray(d.convocatorias) ? d.convocatorias : []).map(normConv),
     textos: (Array.isArray(d.textos) ? d.textos : []).map(normTexto),
-    meta: { ultimaCopia: (d.meta && d.meta.ultimaCopia) || '', cambios: (d.meta && d.meta.cambios) || 0, semilla: !!(d.meta && d.meta.semilla) },
+    meta: { ultimaCopia: (d.meta && d.meta.ultimaCopia) || '', cambios: (d.meta && d.meta.cambios) || 0, semilla: !!(d.meta && d.meta.semilla),
+      monday: normMonday(d.meta && d.meta.monday) },
   };
 }
 
@@ -184,6 +185,7 @@ function cargar() {
     if (!d.textos.length) d.textos = s.textos;
     d.meta.semilla = true;
   }
+  if (ini && !d.meta.monday.tablero) d.meta.monday.tablero = normMonday(ini.meta && ini.meta.monday).tablero;
   return d;
 }
 let S = cargar();
@@ -746,7 +748,7 @@ function pintarFicha() {
 
     <fieldset><legend>Plan de preparación</legend>
       <div id="tareas-zona">${tareasHTML()}</div>
-      <div class="fila-btn"><button type="button" class="btn mini" data-accion="plan">Generar plan hacia atrás</button><button type="button" class="btn mini" data-accion="mas-tarea">Añadir tarea</button></div>
+      <div class="fila-btn"><button type="button" class="btn mini" data-accion="plan">Generar plan hacia atrás</button><button type="button" class="btn mini" data-accion="mas-tarea">Añadir tarea</button>${borrador.idExterno && S.meta.monday.tablero ? '<button type="button" class="btn mini" data-accion="monday-plan">Enviar tareas a monday</button>' : ''}</div>
     </fieldset>
 
     <fieldset><legend>Dinero</legend><div class="rejilla">
@@ -789,24 +791,28 @@ function leerFicha() {
   }));
 }
 
+/* Pasos del plan hacia atrás que aún no están en la lista de tareas de la convocatoria. */
+function pasosPlan(c) {
+  const h = hoy(), quedan = dias(h, c.plazo), previsto = c.semanasPrep * 7;
+  const escala = Math.min(previsto, quedan) / 42;
+  const ya = new Set(c.tareas.map(t => t.texto));
+  const nuevas = [];
+  for (const [antes, texto] of PLAN_BASE) {
+    if (ya.has(texto)) continue;
+    let fch = masDias(c.plazo, -Math.round(antes * escala));
+    if (fch < h) fch = h;
+    nuevas.push({ id: uid(), texto, fecha: fch, hecha: false, mon: '' });
+  }
+  return { nuevas, quedan, previsto };
+}
 function generarPlan() {
   leerFicha();
   if (!borrador.plazo) { aviso('Pon primero la fecha de cierre, aunque sea estimada.'); $('#c-pla').focus(); return; }
-  const h = hoy(), quedan = dias(h, borrador.plazo);
-  if (quedan < 0) { aviso('El plazo ya ha pasado.'); return; }
-  const previsto = borrador.semanasPrep * 7;
-  const escala = Math.min(previsto, quedan) / 42;
-  const ya = new Set(borrador.tareas.map(t => t.texto));
-  let n = 0;
-  for (const [antes, texto] of PLAN_BASE) {
-    if (ya.has(texto)) continue;
-    let fch = masDias(borrador.plazo, -Math.round(antes * escala));
-    if (fch < h) fch = h;
-    borrador.tareas.push({ id: uid(), texto, fecha: fch, hecha: false });
-    n++;
-  }
+  if (dias(hoy(), borrador.plazo) < 0) { aviso('El plazo ya ha pasado.'); return; }
+  const { nuevas, quedan, previsto } = pasosPlan(borrador);
+  borrador.tareas.push(...nuevas);
   $('#tareas-zona').innerHTML = tareasHTML();
-  aviso(n ? `Plan creado: ${n} pasos${quedan < previsto ? `, comprimidos en los ${quedan} días que quedan` : ''}.` : 'El plan ya estaba creado.');
+  aviso(nuevas.length ? `Plan creado: ${nuevas.length} pasos${quedan < previsto ? `, comprimidos en los ${quedan} días que quedan` : ''}.` : 'El plan ya estaba creado.');
 }
 
 function guardarFicha() {
@@ -868,6 +874,271 @@ function importar(texto, modo) {
   return true;
 }
 
+/* ───────── monday.com ─────────
+   Trae el tablero de convocatorias, fusiona sin pisar lo que se haya cambiado aquí y devuelve a monday esos cambios.
+   El token vive aparte de los datos (no entra en las copias). Cada campo se compara con la «foto» de la última
+   sincronización: si solo cambió aquí, se envía; si solo cambió en monday, se trae; si cambió en los dos, gana monday. */
+const CLAVE_TOKEN = 'tabla-de-mareas-monday-token';
+const MON_URL = 'https://api.monday.com/v2';
+// Campo de la herramienta ↔ columna del tablero (por título, para no depender de los id internos).
+const MON_CAMPOS = [
+  { k: 'plazo', col: 'Plazo', t: 'fecha', push: true },
+  { k: 'ambito', col: 'Ámbito', t: 'texto', push: false },
+  { k: 'importeTexto', col: 'Importe', t: 'texto', push: false },
+  { k: 'encaje', col: 'Encaje (1-5)', t: 'numero', push: true },
+  { k: 'notas', col: 'Requisitos y siguiente paso', t: 'largo', push: true },
+  { k: 'enlace', col: 'Enlace oficial', t: 'enlace', push: false },
+  { k: 'responsable', col: 'Responsable', t: 'texto', push: false },
+  { k: 'estado', col: 'Estado', t: 'estado', push: true },
+  { k: 'rol', col: 'Rol de Mareas', t: 'texto', push: false },
+  { k: 'importeSolicitado', col: 'Importe solicitado (€)', t: 'numero', push: true },
+  { k: 'importeConcedido', col: 'Importe concedido (€)', t: 'numero', push: true },
+  { k: 'cofinanciacion', col: 'Cofinanciación exigida (%)', t: 'numero', push: true },
+  { k: 'resolucion', col: 'Resolución prevista', t: 'fecha', push: true },
+  { k: 'motivo', col: 'Motivo de descarte', t: 'texto', push: true },
+  { k: 'carpeta', col: 'Carpeta de Drive', t: 'enlace', push: false },
+];
+const M_ITEM = 'id name column_values{ id text value }';
+const M_CAMBIAR = 'mutation($b:ID!,$i:ID!,$v:JSON!){ change_multiple_column_values(board_id:$b, item_id:$i, column_values:$v){ id } }';
+const igualM = (a, b) => (a == null ? '' : a) === (b == null ? '' : b);
+
+function normMonday(m) {
+  m = m && typeof m === 'object' ? m : {};
+  const foto = {};
+  if (m.foto && typeof m.foto === 'object') for (const [id, v] of Object.entries(m.foto)) if (v && typeof v === 'object') foto[String(id)] = v;
+  return { tablero: String(m.tablero || '').replace(/\D/g, ''), ultima: typeof m.ultima === 'string' ? m.ultima : '', foto };
+}
+function leerToken() { try { return localStorage.getItem(CLAVE_TOKEN) || ''; } catch (e) { return ''; } }
+function guardarToken(t) { try { localStorage.setItem(CLAVE_TOKEN, t); } catch (e) { /* sin almacenamiento: se pedirá otra vez */ } }
+
+async function monQuery(token, query, variables) {
+  let res;
+  try {
+    res = await fetch(MON_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: token }, body: JSON.stringify({ query, variables }) });
+  } catch (e) {
+    throw new Error('No he podido conectar con monday. Comprueba la conexión; si sigue igual, puede que el navegador esté bloqueando la llamada.');
+  }
+  let j = null;
+  try { j = await res.json(); } catch (e) { /* sin cuerpo */ }
+  if (res.status === 401 || res.status === 403) throw new Error('monday no acepta el token. Copia uno nuevo desde tu perfil, en Developers.');
+  if (!res.ok || !j) throw new Error(`monday ha respondido con un error (${res.status}).`);
+  if (j.errors && j.errors.length) throw new Error('monday: ' + (j.errors[0].message || 'error desconocido'));
+  return j.data;
+}
+
+async function monLeerTablero(token, tablero) {
+  let d = await monQuery(token, `query($id:[ID!]){ boards(ids:$id){ name columns{ id title type } items_page(limit:200){ cursor items{ ${M_ITEM} } } } }`, { id: [tablero] });
+  const b = d && d.boards && d.boards[0];
+  if (!b) throw new Error('No encuentro ese tablero. Revisa el número y que tu cuenta tenga acceso.');
+  const items = b.items_page.items.slice();
+  let cursor = b.items_page.cursor;
+  while (cursor && items.length < 5000) {
+    d = await monQuery(token, `query($c:String!){ next_items_page(limit:200, cursor:$c){ cursor items{ ${M_ITEM} } } }`, { c: cursor });
+    items.push(...d.next_items_page.items);
+    cursor = d.next_items_page.cursor;
+  }
+  return { columnas: b.columns, items };
+}
+
+function monValor(cv, tipo) {
+  if (!cv) return tipo === 'numero' ? null : '';
+  const txt = String(cv.text == null ? '' : cv.text).trim();
+  if (tipo === 'fecha') return fechaOK(txt.slice(0, 10));
+  if (tipo === 'numero') return num(txt.replace(/\s/g, ''));
+  if (tipo === 'enlace') { try { const v = JSON.parse(cv.value || 'null'); return v && v.url ? String(v.url) : ''; } catch (e) { return ''; } }
+  return txt;
+}
+function monAConv(it, columnas) {
+  const idDe = {}; columnas.forEach(c => { idDe[c.title] = c.id; });
+  const porId = {}; (it.column_values || []).forEach(v => { porId[v.id] = v; });
+  const m = { idExterno: String(it.id), nombre: String(it.name || '').trim() };
+  for (const c of MON_CAMPOS) m[c.k] = monValor(porId[idDe[c.col]], c.t);
+  return m;
+}
+
+/* Fusiona el tablero con S. No borra nada: lo que ya no está en monday se cuenta y se deja. */
+function monFusionar(items, columnas) {
+  const foto = S.meta.monday.foto, r = { nuevas: 0, act: 0, conflictos: 0, tramites: 0, sinEstado: 0, ausentes: 0 };
+  const vistos = new Set();
+  for (const it of items) {
+    const m = monAConv(it, columnas);
+    if (!m.nombre) continue;
+    if (m.ambito === 'Trámite') { r.tramites++; continue; }
+    vistos.add(m.idExterno);
+    const c = S.convocatorias.find(x => x.idExterno === m.idExterno)
+      || S.convocatorias.find(x => !x.idExterno && x.nombre.toLowerCase() === m.nombre.toLowerCase());
+    if (!ESTADOS.some(e => e.id === m.estado)) { r.sinEstado++; m.estado = c ? c.estado : 'Detectada'; }
+    if (!c) {
+      const n = normConv({ ...m, plazoConfirmado: !!m.plazo });
+      S.convocatorias.push(n);
+      foto[n.idExterno] = Object.fromEntries(MON_CAMPOS.map(x => [x.k, n[x.k]]));
+      r.nuevas++;
+      continue;
+    }
+    c.idExterno = m.idExterno;
+    const n = normConv({ ...c, ...m, id: c.id }), f0 = foto[c.idExterno], mv = {};
+    let cambio = c.nombre !== m.nombre;
+    c.nombre = m.nombre;
+    for (const x of MON_CAMPOS) {
+      const k = x.k, local = c[k], mon = n[k];
+      mv[k] = mon;
+      const localCambio = f0 && !igualM(local, f0[k]);
+      if (!localCambio) { if (!igualM(local, mon)) { c[k] = mon; cambio = true; } }
+      else if (!igualM(mon, f0[k]) && !igualM(mon, local)) { c[k] = mon; cambio = true; r.conflictos++; }
+    }
+    foto[c.idExterno] = mv;
+    if (cambio) r.act++;
+  }
+  r.ausentes = S.convocatorias.filter(c => c.idExterno && !vistos.has(c.idExterno)).length;
+  return r;
+}
+
+/* Cambios hechos aquí desde la última sincronización, solo en campos que se pueden enviar y con valor. */
+function monPendientes() {
+  const out = [];
+  for (const c of S.convocatorias) {
+    const f0 = c.idExterno && S.meta.monday.foto[c.idExterno];
+    if (!f0) continue;
+    const cam = MON_CAMPOS.filter(x => x.push && !igualM(c[x.k], f0[x.k]) && c[x.k] !== '' && c[x.k] != null);
+    if (cam.length) out.push({ c, cam });
+  }
+  return out;
+}
+function monValorEnvio(x, v) {
+  if (x.t === 'fecha') return { date: v };
+  if (x.t === 'estado') return { label: v };
+  if (x.t === 'numero') return String(v);
+  if (x.t === 'largo') return { text: v };
+  return v;
+}
+async function monEnviarCambios(token, tablero, columnas, pend) {
+  const idDe = {}; columnas.forEach(c => { idDe[c.title] = c.id; });
+  let ok = 0, fallos = 0;
+  for (const { c, cam } of pend) {
+    const v = {};
+    for (const x of cam) if (idDe[x.col]) v[idDe[x.col]] = monValorEnvio(x, c[x.k]);
+    if (!Object.keys(v).length) continue;
+    try {
+      await monQuery(token, M_CAMBIAR, { b: tablero, i: c.idExterno, v: JSON.stringify(v) });
+      const f0 = S.meta.monday.foto[c.idExterno];
+      for (const x of cam) if (idDe[x.col]) f0[x.k] = c[x.k];
+      ok++;
+    } catch (e) { fallos++; if (/token/.test(e.message)) throw e; }
+  }
+  return { ok, fallos };
+}
+
+/* Una subtarea de monday por cada tarea del plan; la fecha se pone si el tablero de subelementos tiene una columna de fecha. */
+async function monCrearSubtareas(token, c, tareas, cache) {
+  let n = 0;
+  for (const t of tareas) {
+    const d = await monQuery(token, 'mutation($p:ID!,$n:String!){ create_subitem(parent_item_id:$p, item_name:$n){ id board{ id } } }', { p: c.idExterno, n: t.texto });
+    const s = d.create_subitem;
+    t.mon = String(s.id);
+    n++;
+    if (!t.fecha) continue;
+    if (cache.fecha === undefined) {
+      const q = await monQuery(token, 'query($b:[ID!]){ boards(ids:$b){ columns{ id type } } }', { b: [s.board.id] });
+      const col = q.boards && q.boards[0] && q.boards[0].columns.find(x => x.type === 'date');
+      cache.fecha = col ? col.id : null;
+    }
+    if (cache.fecha) await monQuery(token, M_CAMBIAR, { b: s.board.id, i: s.id, v: JSON.stringify({ [cache.fecha]: { date: t.fecha } }) });
+  }
+  return n;
+}
+
+let monOcupado = false, previoMonday = null;
+function monMensaje(texto, error) {
+  const el = $('#mon-msg');
+  if (!el) return;
+  el.hidden = !texto;
+  el.textContent = texto || '';
+  el.classList.toggle('no', !!error);
+}
+function pintarMonday() {
+  const el = $('#mon-tablero');
+  if (!el) return;
+  el.value = S.meta.monday.tablero;
+  $('#mon-token').value = leerToken();
+  $('#mon-deshacer').hidden = true;
+  const u = S.meta.monday.ultima, p = monPendientes().length;
+  monMensaje(u ? `Última sincronización: ${f(u.slice(0, 10))} a las ${u.slice(11, 16)}.${p ? ` Hay ${plural(p, 'convocatoria con cambios', 'convocatorias con cambios')} por enviar.` : ''}` : '', false);
+}
+
+async function sincronizarMonday() {
+  if (monOcupado) return;
+  const tablero = $('#mon-tablero').value.replace(/\D/g, ''), token = $('#mon-token').value.trim();
+  if (!tablero) { monMensaje('Escribe el número del tablero: está en la dirección web, tras /boards/.', true); return; }
+  if (!token) { monMensaje('Pega tu token personal de monday.', true); return; }
+  monOcupado = true;
+  monMensaje('Conectando con monday…', false);
+  const previo = foto();
+  try {
+    guardarToken(token);
+    S.meta.monday.tablero = tablero;
+    const b = await monLeerTablero(token, tablero);
+    const r = monFusionar(b.items, b.columnas);
+
+    // Convocatorias que pasan a «En preparación» sin plan: se crea el plan hacia atrás.
+    const planes = [];
+    for (const c of S.convocatorias) {
+      if (c.idExterno && c.estado === 'En preparación' && c.plazo && c.plazo >= hoy() && !c.tareas.length) {
+        c.tareas.push(...pasosPlan(c).nuevas);
+        planes.push(c);
+      }
+    }
+    const pend = monPendientes();
+    let enviados = 0, fallos = 0, subs = 0, cancelado = false;
+    if (pend.length || planes.length) {
+      const lineas = [
+        ...pend.map(p => `· ${p.c.nombre}: ${p.cam.map(x => x.col).join(', ')}`),
+        ...planes.map(c => `· ${c.nombre}: plan de ${plural(c.tareas.length, 'tarea', 'tareas')} como subtareas`),
+      ];
+      if (confirm(`Voy a escribir en monday:\n\n${lineas.slice(0, 12).join('\n')}${lineas.length > 12 ? `\n… y ${lineas.length - 12} más` : ''}\n\n¿Enviar?`)) {
+        const e = await monEnviarCambios(token, tablero, b.columnas, pend);
+        enviados = e.ok; fallos = e.fallos;
+        const cache = {};
+        for (const c of planes) subs += await monCrearSubtareas(token, c, c.tareas.filter(t => !t.mon), cache);
+      } else cancelado = true;
+    }
+    S.meta.monday.ultima = new Date().toISOString().slice(0, 16);
+    guardar(); render(); pintarMonday();
+    const escribio = enviados + subs > 0;
+    const partes = [
+      r.nuevas ? plural(r.nuevas, 'nueva', 'nuevas') : '', r.act ? plural(r.act, 'actualizada', 'actualizadas') : '',
+      enviados ? `${plural(enviados, 'enviada', 'enviadas')} a monday` : '', subs ? plural(subs, 'subtarea creada', 'subtareas creadas') : '',
+      r.conflictos ? `${plural(r.conflictos, 'campo cambiado en los dos sitios: ha ganado monday', 'campos cambiados en los dos sitios: ha ganado monday')}` : '',
+      fallos ? `${plural(fallos, 'envío falló', 'envíos fallaron')}` : '', cancelado ? 'cambios sin enviar' : '',
+    ].filter(Boolean);
+    const resumen = `monday sincronizado${partes.length ? ': ' + partes.join(', ') : ': todo estaba al día'}.`;
+    monMensaje(resumen + (escribio ? ' Deshacer solo revierte lo traído a la herramienta, no lo escrito en monday.' : ''), false);
+    previoMonday = partes.length ? previo : null;
+    $('#mon-deshacer').hidden = !previoMonday;
+    aviso(resumen);
+  } catch (e) {
+    guardar();
+    monMensaje(e.message, true);
+  } finally { monOcupado = false; }
+}
+
+async function enviarPlanMonday() {
+  const token = leerToken();
+  if (!token) { aviso('Conecta antes con monday desde Datos.'); return; }
+  leerFicha();
+  const i = S.convocatorias.findIndex(c => c.id === borrador.id);
+  if (i < 0) { aviso('Guarda primero la convocatoria.'); return; }
+  const pend = borrador.tareas.filter(t => !t.mon && t.texto.trim());
+  if (!pend.length) { aviso('Todas las tareas ya están en monday, o no hay ninguna.'); return; }
+  if (!confirm(`Se crearán ${plural(pend.length, 'subtarea', 'subtareas')} en monday bajo «${borrador.nombre}». ¿Continuar?`)) return;
+  try {
+    const n = await monCrearSubtareas(token, borrador, pend, {});
+    aviso(`${plural(n, 'subtarea creada', 'subtareas creadas')} en monday.`);
+  } catch (e) { aviso(e.message); }
+  S.convocatorias[i] = borrador;
+  guardar();
+  $('#tareas-zona').innerHTML = tareasHTML();
+}
+
 function exportarICS() {
   const sello = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
   const t = s => String(s).replace(/\\/g, '\\\\').replace(/([,;])/g, '\\$1').replace(/\r?\n/g, '\\n');
@@ -892,6 +1163,7 @@ function exportarICS() {
 function pintarDatos() {
   const c = S.meta.ultimaCopia;
   $('#btn-semilla').hidden = !semilla();
+  pintarMonday();
   $('#datos-estado').textContent = `${plural(S.convocatorias.length, 'convocatoria', 'convocatorias')} y ${plural(S.textos.length, 'texto', 'textos')} en este navegador. ${c ? `Última copia: ${f(c.slice(0, 10))}.` : 'Aún no se ha descargado ninguna copia.'}`;
 }
 
@@ -914,6 +1186,8 @@ function aviso(texto, previo) {
   previoAviso = previo || null;
   $('#toast-deshacer').hidden = !previo;
   el.classList.add('ver');
+  // En la capa superior para que se vea también por encima de los diálogos abiertos.
+  try { if (el.matches(':popover-open')) el.hidePopover(); el.showPopover(); } catch (e) { /* navegador sin popover */ }
   clearTimeout(relojAviso);
   relojAviso = setTimeout(() => { el.classList.remove('ver'); previoAviso = null; }, previo ? 9000 : 4200);
 }
@@ -960,6 +1234,12 @@ document.addEventListener('click', async ev => {
     case 'datos': pintarDatos(); dlgDatos.showModal(); break;
     case 'exportar': exportar(); break;
     case 'ics': exportarICS(); break;
+    case 'monday-sync': await sincronizarMonday(); break;
+    case 'monday-olvidar': { try { localStorage.removeItem(CLAVE_TOKEN); } catch (e) { /* nada */ } $('#mon-token').value = ''; pintarDatos(); aviso('Token olvidado en este navegador.'); } break;
+    case 'monday-plan': await enviarPlanMonday(); break;
+    case 'monday-deshacer':
+      if (previoMonday) { try { S = normalizar(JSON.parse(previoMonday)); } catch (e) { break; } previoMonday = null; guardar(); render(); pintarMonday(); monMensaje('Sincronización deshecha en la herramienta. Lo que ya se escribió en monday sigue allí.', false); }
+      break;
     case 'resumen': aviso(await copiar(resumenTexto()) ? 'Resumen copiado. Pégalo en el chat del equipo.' : 'No se ha podido copiar.'); break;
     case 'mas-ej': {
       const ult = S.entidad.ejercicios[S.entidad.ejercicios.length - 1];

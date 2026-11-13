@@ -89,6 +89,17 @@
         <div class="fila-btn"><button type="button" class="btn" data-accion="importar-texto">Importar el texto pegado</button></div>
       </fieldset>
 
+      <fieldset id="bloque-monday"><legend>monday.com</legend>
+        <p class="sub">Trae el tablero de convocatorias a la herramienta y devuelve a monday los cambios de estado, plazo, importes y notas hechos aquí. Si un dato cambia en los dos sitios, gana monday. Antes de escribir en monday te pregunto.</p>
+        <div class="rejilla">
+          <div style="grid-column:span 5"><label class="etq" for="mon-tablero">Número del tablero</label><input id="mon-tablero" class="campo" inputmode="numeric" autocomplete="off"></div>
+          <div style="grid-column:span 7"><label class="etq" for="mon-token">Token personal de monday</label><input id="mon-token" class="campo" type="password" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <p class="ayuda">El número está en la dirección del tablero, tras /boards/. El token se saca en monday, en tu foto, Developers, API token. Se guarda solo en este navegador y no entra en las copias de seguridad.</p>
+        <div class="fila-btn"><button type="button" class="btn primario" data-accion="monday-sync">Sincronizar con monday</button><button type="button" class="btn mini" data-accion="monday-olvidar">Olvidar el token</button><button type="button" class="btn mini" id="mon-deshacer" data-accion="monday-deshacer" hidden>Deshacer esta sincronización</button></div>
+        <p class="aviso" id="mon-msg" role="status" hidden></p>
+      </fieldset>
+
       <fieldset><legend>Calendario</legend>
         <p class="sub">Descarga los cierres, el inicio de cada preparación y las tareas con fecha en un archivo .ics para Google Calendar, Outlook o el calendario del móvil.</p>
         <div class="fila-btn"><button type="button" class="btn" data-accion="ics">Descargar plazos (.ics)</button></div>
@@ -104,7 +115,7 @@
   </div>
 </dialog>
 
-<div id="toast" role="status" aria-live="polite"><span id="toast-t"></span><button type="button" id="toast-deshacer" data-accion="deshacer" hidden>Deshacer</button></div>
+<div id="toast" popover="manual" role="status" aria-live="polite"><span id="toast-t"></span><button type="button" id="toast-deshacer" data-accion="deshacer" hidden>Deshacer</button></div>
 
 <script id="semilla" type="application/json">/*__SEMILLA__*/</script>
 <script>

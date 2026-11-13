@@ -288,7 +288,8 @@ legend { font: 700 var(--t1)/1.2 var(--f-titulo); padding: 0 0 var(--e2); margin
 
 #toast {
   display: flex; align-items: center; gap: var(--e4);
-  position: fixed; left: 50%; bottom: var(--e5); transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
+  position: fixed; left: 50%; bottom: var(--e5); top: auto; right: auto; margin: 0; border: 0; overflow: visible; height: auto;
+  transform: translate(-50%, 20px); opacity: 0; pointer-events: none;
   background: var(--tinta); color: var(--papel); padding: var(--e3) var(--e4); border-radius: var(--radio); font-weight: 600; font-size: 0.9rem;
   transition: opacity 0.2s, transform 0.2s; max-width: calc(100vw - 32px); z-index: 20;
 }

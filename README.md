@@ -44,6 +44,20 @@ Los datos no se sincronizan solos. La rutina que funciona:
 
 **Fusionar** permite añadir convocatorias nuevas o actualizar fechas sin perder las tareas ya creadas. Empareja por `idExterno` o, si no lo hay, por nombre.
 
+## Sincronizar con monday
+
+En **Datos → monday.com** escribes el número del tablero (está en su dirección, tras `/boards/`) y pegas tu token personal (monday → tu foto → Developers → API token). Un botón hace tres cosas:
+
+1. **Trae** el tablero: convocatorias nuevas, estados, plazos, importes, responsable y notas. Los elementos de ámbito «Trámite» se saltan, porque los trámites viven en la pantalla Entidad.
+2. **Devuelve** a monday lo que hayas cambiado aquí (estado, plazo, importes, resolución, encaje, motivo de descarte y notas). Antes de escribir te muestra la lista y pide confirmación.
+3. **Crea el plan**: cuando una convocatoria pasa a «En preparación» y no tiene tareas, genera el plan hacia atrás y lo envía a monday como subtareas con su fecha. Desde la ficha, «Enviar tareas a monday» hace lo mismo con las tareas que añadas a mano.
+
+Cada campo se compara con una foto de la última sincronización: si solo cambió aquí, se envía; si solo cambió en monday, se trae; si cambió en los dos sitios, gana monday. Nada se borra: lo que desaparece del tablero se deja tal cual aquí. «Deshacer esta sincronización» revierte lo traído, no lo que ya se escribió en monday.
+
+Las columnas se reconocen por su **título** (Plazo, Ámbito, Importe, Encaje (1-5), Requisitos y siguiente paso, Enlace oficial, Responsable, Estado, Rol de Mareas, Importe solicitado (€), Importe concedido (€), Cofinanciación exigida (%), Resolución prevista, Motivo de descarte, Carpeta de Drive), así que no dependen de los identificadores internos. Si renombras una columna, hay que cambiarla también en `MON_CAMPOS` de `src/app.js`.
+
+El token se guarda solo en el navegador de cada persona y no entra en las copias de seguridad. El número del tablero sí viaja en los datos iniciales (`meta.monday.tablero`).
+
 ## Formato de los datos
 
 ```json
